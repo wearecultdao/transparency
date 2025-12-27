@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Proposal-186-187</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-panel: rgba(6, 13, 21, 0.96);
+      --bg-panel-alt: rgba(10, 18, 28, 0.92);
+      --stroke: rgba(45, 89, 119, 0.9);
+      --stroke-soft: rgba(65, 120, 153, 0.32);
+      --text-primary: #e8f1ff;
+      --text-muted: #6c7d96;
+      --accent: #f5a623;
+      --accent-2: #18e6c1;
+      --accent-soft: rgba(24, 230, 193, 0.2);
+      --danger: #ff5f6d;
+      --success: #6ff29f;
+      --magenta: #ff4ad8;
+      --phase-2: #b36bff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      background: #010101;
+      min-height: 100vh;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-primary);
+      letter-spacing: 0.01em;
+      position: relative;
+      padding-bottom: 60px;
+    }
+
+    #matrixCanvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    h1, h2, h3, h4 {
+      font-family: 'Chakra Petch', sans-serif;
+      letter-spacing: 0.08em;
+    }
+
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .text-muted { color: var(--text-muted) !important; }
+    .text-accent { color: var(--accent-2); }
+    .text-positive { color: var(--success) !important; }
+    .text-negative { color: var(--magenta) !important; }
+    .text-fees { color: var(--accent) !important; }
+    .is-hidden { display: none !important; }
+
+    .console-shell {
+      position: relative;
+      z-index: 1;
+      max-width: 1180px;
+      margin: 0 auto;
+      padding-top: 56px;
+    }
+
+    .command-banner {
+      background: linear-gradient(135deg, rgba(9, 16, 25, 0.95), rgba(10, 26, 37, 0.9));
+      border: 1px solid var(--stroke);
+      border-radius: 22px;
+      padding: 28px 32px;
+      box-shadow: 0 30px 120px rgba(0, 0, 0, 0.55);
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      margin-bottom: 26px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    @media (min-width: 860px) {
+      .command-banner {
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+      }
+    }
+
+    .command-banner .tagline {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .command-banner h1 {
+      font-size: 2.05rem;
+      margin: 0;
+      color: #fafcff;
+    }
+
+    .banner-left { grid-column: 1; }
+    .banner-center { grid-column: 1; justify-self: start; }
+    .banner-right { grid-column: 1; justify-self: stretch; text-align: right; }
+
+    @media (min-width: 860px) {
+      .banner-center { grid-column: 2; justify-self: center; }
+      .banner-right { grid-column: 3; justify-self: end; text-align: right; }
+    }
+
+    .banner-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .banner-actions.vertical {
+      flex-direction: column;
+      align-items: flex-end;
+    }
+
+    .audio-toggle {
+      border-radius: 999px;
+      padding: 8px 16px;
+      line-height: 0;
+      min-width: 56px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .audio-toggle svg {
+      display: block;
+      width: 22px;
+      height: 22px;
+    }
+
+    .phase-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 14px 24px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.04);
+      box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.45);
+      font-family: 'Chakra Petch', sans-serif;
+      font-weight: 600;
+      font-size: 1.05rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .phase-badge.phase-1 {
+      border-color: rgba(111, 242, 159, 0.35);
+      background: rgba(111, 242, 159, 0.10);
+      color: #eafff2;
+    }
+
+    .phase-badge.phase-2 {
+      border-color: rgba(179, 107, 255, 0.42);
+      background: rgba(179, 107, 255, 0.12);
+      color: #f4ebff;
+    }
+
+    .phase-badge.phase-loading {
+      opacity: 0.85;
+    }
+
+    .card {
+      border: 1px solid var(--stroke-soft);
+      border-radius: 20px;
+      background: var(--bg-panel);
+      color: var(--text-primary);
+      padding: 0;
+      margin-bottom: 22px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+      transition: transform 0.35s ease, border-color 0.35s ease;
+    }
+
+    .card:hover { transform: translateY(-3px); }
+    .card:hover:not(.tint-positive):not(.tint-negative) { border-color: var(--accent-soft); }
+
+    #healthCard.tint-positive {
+      background:
+        linear-gradient(160deg, rgba(24,230,193,0.12), rgba(24,230,193,0.02)),
+        linear-gradient(180deg, rgba(0,0,0,0.35), rgba(0,0,0,0.35)),
+        var(--bg-panel);
+      border-color: rgba(24,230,193,0.28);
+    }
+
+    #healthCard.tint-negative {
+      background:
+        linear-gradient(160deg, rgba(239,95,100,0.12), rgba(239,95,100,0.02)),
+        linear-gradient(180deg, rgba(0,0,0,0.35), rgba(0,0,0,0.35)),
+        var(--bg-panel);
+      border-color: rgba(239,95,100,0.42);
+    }
+
+    #healthCard.tint-positive .console-subpanel--dense,
+    #healthCard.tint-negative .console-subpanel--dense {
+      background: radial-gradient(circle at top left, rgba(8, 16, 26, 0.82), rgba(6, 12, 20, 0.92));
+      border-color: rgba(255, 255, 255, 0.07);
+      box-shadow: inset 0 0 34px rgba(0, 0, 0, 0.55);
+    }
+
+    .card-header {
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 18px 24px;
+      font-size: 0.78rem;
+      letter-spacing: 0.35em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .card-header::after {
+      content: "";
+      position: absolute;
+      left: 24px;
+      bottom: 10px;
+      width: 60px;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), transparent);
+    }
+
+    .card-body { padding: 22px 24px; }
+
+    .grid {
+      display: grid;
+      gap: 18px;
+    }
+
+    .grid.metrics {
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .console-subpanel {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      padding: 18px 20px;
+      box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.4);
+    }
+
+    .console-subpanel--dense {
+      background: radial-gradient(circle at top left, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      box-shadow: inset 0 0 30px rgba(0,0,0,0.45);
+      padding: 14px 16px;
+    }
+
+    .metric-card {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-height: 110px;
+      justify-content: center;
+      text-transform: uppercase;
+      letter-spacing: 0.25em;
+      font-size: 0.62rem;
+      color: var(--text-muted);
+    }
+
+    .metric-card .metric-value {
+      font-size: 1.12rem;
+      color: var(--text-primary);
+      font-family: 'Chakra Petch', sans-serif;
+      letter-spacing: 0.04em;
+    }
+
+    .metric-card .metric-sub {
+      font-size: 0.65rem;
+      letter-spacing: 0.12em;
+      color: var(--text-muted);
+    }
+
+    .latest-link {
+      color: var(--text-muted);
+      text-decoration: none;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+
+    .latest-link:hover {
+      color: var(--accent-2);
+      text-decoration: underline;
+    }
+
+    .latest-link.is-empty {
+      opacity: 0.7;
+      pointer-events: none;
+    }
+
+    .chart-wrap {
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: linear-gradient(135deg, rgba(8, 16, 26, 0.7), rgba(6, 12, 20, 0.9));
+      padding: 16px;
+    }
+
+    .chart-title-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .chart-reset-btn {
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(6, 14, 22, 0.8);
+      color: var(--text-muted);
+      width: 34px;
+      height: 26px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+      line-height: 1;
+      cursor: pointer;
+      letter-spacing: 0;
+      transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .chart-reset-btn:hover {
+      color: var(--accent-2);
+      border-color: var(--accent-2);
+    }
+
+    .chart-reset-btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .chart-toolbar {
+      display: flex;
+      gap: 6px;
+      margin-left: auto;
+      flex-wrap: wrap;
+    }
+
+    .chart-toolbar button {
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(6, 14, 22, 0.8);
+      color: var(--text-muted);
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .chart-toolbar button:hover {
+      color: var(--accent-2);
+      border-color: var(--accent-2);
+    }
+
+    .chart-toolbar button.active {
+      color: var(--accent-2);
+      border-color: var(--accent-2);
+      background: rgba(24, 230, 193, 0.08);
+    }
+
+    .nav-chart-canvas-wrap {
+      position: relative;
+      width: 100%;
+      height: 220px;
+    }
+
+    .nav-chart-canvas {
+      width: 100%;
+      height: 220px;
+      display: block;
+    }
+
+    #investmentChart {
+      width: 100%;
+      height: 220px;
+      display: block;
+    }
+
+    .chart-legend {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      color: var(--text-muted);
+      letter-spacing: 0.08em;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+    }
+
+    .chart-legend span {
+      display: inline-flex;
+      align-items: center;
+      cursor: pointer;
+    }
+
+    .chart-legend span.disabled {
+      opacity: 0.35;
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+      margin-right: 8px;
+    }
+
+    .legend-dot.net-capital { background: rgba(232, 241, 255, 0.55); border: 1px solid rgba(232, 241, 255, 0.75); }
+    .legend-dot.nav { background: var(--accent-2); }
+    .legend-dot.fees { background: var(--accent); }
+    .legend-dot.returns { background: var(--magenta); }
+
+    .nav-chart-tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: rgba(5, 8, 12, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 0.75rem;
+      color: var(--text-primary);
+      font-family: 'JetBrains Mono', monospace;
+      opacity: 0;
+      transition: opacity 0.1s ease;
+      z-index: 5;
+      min-width: 170px;
+    }
+
+    .nav-chart-tooltip.visible {
+      opacity: 1;
+    }
+
+    .nav-chart-tooltip .tooltip-label {
+      text-transform: uppercase;
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      display: block;
+    }
+
+    .nav-chart-tooltip .tooltip-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 2px;
+      font-size: 0.75rem;
+    }
+
+    .tooltip-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      flex: 0 0 auto;
+    }
+
+    .tooltip-dot.nav { background: var(--accent-2); }
+    .tooltip-dot.fees { background: var(--accent); }
+    .tooltip-dot.returns { background: var(--magenta); }
+    .tooltip-dot.net-capital { background: rgba(232, 241, 255, 0.65); border: 1px solid rgba(232, 241, 255, 0.75); }
+
+    .chart-selection-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .chart-selection-box {
+      position: absolute;
+      top: 0;
+      height: 100%;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 4px;
+      display: none;
+    }
+
+    .error-banner {
+      border: 1px solid rgba(255, 95, 109, 0.35);
+      background: rgba(255, 95, 109, 0.08);
+      border-radius: 16px;
+      padding: 14px 16px;
+      margin-bottom: 18px;
+      color: #ffd7db;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="matrixCanvas"></canvas>
+  <div class="container console-shell">
+    <div id="errorBanner" class="error-banner mono small"></div>
+
+    <div class="command-banner">
+      <div class="banner-left">
+        <div class="tagline">CULT DAO PROPOSALS 186|187</div>
+        <h1>Public Reporting</h1>
+        <div class="mono small text-muted mt-2" id="updatedLabel">Loading…</div>
+      </div>
+      <div class="banner-right">
+        <div class="banner-actions vertical">
+          <div id="phaseBadge" class="phase-badge phase-loading">Phase Loading…</div>
+          <div class="banner-actions">
+            <button id="btnBannerReload" class="btn btn-outline-light btn-sm audio-toggle" type="button" title="Reload data" aria-label="Reload data">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 256 256"><path d="M136,80v43.47l36.12,21.67a8,8,0,0,1-8.24,13.72l-40-24A8,8,0,0,1,120,128V80a8,8,0,0,1,16,0Zm91.06-23.39a8,8,0,0,0-8.72,1.73L206,70.71c-3.23-3.51-6.56-7-10.1-10.59a96,96,0,1,0-2,137.7,8,8,0,0,0-11-11.64A80,80,0,1,1,184.54,71.4c3.54,3.58,6.87,7.1,10.11,10.63L178.34,98.34A8,8,0,0,0,184,112h40a8,8,0,0,0,8-8V64A8,8,0,0,0,227.06,56.61Z"></path></svg>
+            </button>
+            <button id="btnAudio" class="btn btn-outline-light btn-sm audio-toggle" type="button" title="Sound: Off" aria-label="Sound: Off">
+              <span class="audio-toggle-icon audio-toggle-icon-off" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 256 256"><path d="M192,152V104a8,8,0,0,1,16,0v48a8,8,0,0,1-16,0Zm40-72a8,8,0,0,0-8,8v80a8,8,0,0,0,16,0V88A8,8,0,0,0,232,80ZM221.92,210.62a8,8,0,1,1-11.84,10.76L168,175.09V224a8,8,0,0,1-12.91,6.31L85.25,176H40a16,16,0,0,1-16-16V96A16,16,0,0,1,40,80H81.55L50.08,45.38A8,8,0,0,1,61.92,34.62ZM152,157.49,96.1,96H40v64H88a7.94,7.94,0,0,1,4.91,1.69L152,207.64ZM125.06,69.31l26.94-21v58.47a8,8,0,0,0,16,0V32a8,8,0,0,0-12.91-6.31l-39.85,31a8,8,0,0,0,9.82,12.63Z"></path></svg>
+              </span>
+              <span class="audio-toggle-icon audio-toggle-icon-on is-hidden" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 256 256"><path d="M168,32V224a8,8,0,0,1-12.91,6.31L85.25,176H40a16,16,0,0,1-16-16V96A16,16,0,0,1,40,80H85.25l69.84-54.31A8,8,0,0,1,168,32Zm32,64a8,8,0,0,0-8,8v48a8,8,0,0,0,16,0V104A8,8,0,0,0,200,96Zm32-16a8,8,0,0,0-8,8v80a8,8,0,0,0,16,0V88A8,8,0,0,0,232,80Z"></path></svg>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="impactCard">
+      <div class="card-header">
+        <span>Return & Burn Metrics</span>
+        <a id="latestDistributionLink" class="latest-link is-empty" target="_blank" rel="noopener noreferrer">Latest Distribution: —</a>
+      </div>
+      <div class="card-body">
+        <div class="grid metrics">
+                <div class="console-subpanel console-subpanel--dense metric-card">
+            <div class="metric-label">COMMUNITY REWARDS</div>
+            <div class="metric-value" id="impactRewardsValue">—</div>
+            <div class="metric-sub" id="impactRewardsSub">—</div>
+          </div>
+              <div class="console-subpanel console-subpanel--dense metric-card">
+            <div class="metric-label">PROTOCOL BURN</div>
+            <div class="metric-value" id="impactBurnValue">—</div>
+            <div class="metric-sub" id="impactBurnSub">—</div>
+          </div>
+          <div class="console-subpanel console-subpanel--dense metric-card">
+            <div class="metric-label">TOTAL VALUE RETURNED</div>
+            <div class="metric-value" id="impactTotalValue">—</div>
+            <div class="metric-sub" id="impactTotalSub">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="healthCard">
+      <div class="card-header">
+        <span>Investment Health</span>
+        <a id="latestActionLink" class="latest-link is-empty" target="_blank" rel="noopener noreferrer">Latest Action: —</a>
+      </div>
+      <div class="card-body">
+        <div class="grid metrics">
+          <div id="healthNetCapitalCard" class="console-subpanel console-subpanel--dense metric-card is-hidden">
+            <div class="metric-label">NET CAPITAL INVESTED</div>
+            <div class="metric-value" id="healthNetCapitalValue">—</div>
+            <div class="metric-sub" id="healthNetCapitalSub">—</div>
+          </div>
+          <div class="console-subpanel console-subpanel--dense metric-card">
+            <div class="metric-label">CURRENT INVESTMENT VALUE</div>
+            <div class="metric-value" id="healthInvestmentValue">—</div>
+            <div class="metric-sub" id="healthInvestmentSub">—</div>
+          </div>
+          <div class="console-subpanel console-subpanel--dense metric-card">
+            <div class="metric-label">FEES COLLECTED (TOTAL)</div>
+            <div class="metric-value" id="healthFeesCollectedValue">—</div>
+            <div class="metric-sub" id="healthFeesCollectedSub">—</div>
+          </div>
+          <div class="console-subpanel console-subpanel--dense metric-card">
+            <div class="metric-label">NET PROFIT</div>
+            <div class="metric-value" id="healthNetProfitValue">—</div>
+            <div class="metric-sub" id="healthNetProfitSub">—</div>
+          </div>
+          <div class="console-subpanel console-subpanel--dense metric-card">
+            <div class="metric-label">PERFORMANCE %</div>
+            <div class="metric-value" id="healthRoiValue">—</div>
+            <div class="metric-sub" id="healthRoiSub">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="chart-title-wrap">
+          <span>INVESTMENT / FEES / RETURNS</span>
+          <button id="investmentChartResetBtn" class="chart-reset-btn" type="button" title="Reset view" aria-label="Reset view">⟲</button>
+          <button id="investmentReloadBtn" class="chart-reset-btn" type="button" title="Reload data" aria-label="Reload data">↻</button>
+        </div>
+        <div id="investmentChartToolbar" class="chart-toolbar" aria-label="Chart timeframe controls"></div>
+      </div>
+      <div class="card-body">
+        <div class="chart-wrap">
+          <div id="investmentChartWrap" class="nav-chart-canvas-wrap">
+            <canvas id="investmentChart" class="nav-chart-canvas"></canvas>
+            <div class="chart-selection-overlay" aria-hidden="true">
+              <div id="investmentChartSelectionBox" class="chart-selection-box"></div>
+            </div>
+            <div id="investmentChartTooltip" class="nav-chart-tooltip"></div>
+          </div>
+          <div class="chart-legend">
+            <span data-series="baseline"><span class="legend-dot net-capital"></span>Net Capital</span>
+            <span data-series="nav"><span class="legend-dot nav"></span>NAV</span>
+            <span data-series="fees"><span class="legend-dot fees"></span>Fees Collected</span>
+            <span data-series="returns"><span class="legend-dot returns"></span>Cumulative Returns</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <audio id="bgAudio" loop>
+    <source src="./wearegoingtobegintoacttoday.m4a" type="audio/mp4">
+  </audio>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.1/dist/ethers.umd.min.js"></script>
+  <script type="module" src="./public.js"></script>
+</body>
+</html>
