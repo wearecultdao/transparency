@@ -2757,14 +2757,13 @@ async function render() {
   if (refs.health.claimableFeesSub) {
     const tokenLine = document.createElement('div');
     tokenLine.textContent = `ENA ${formatToken(claimableFeesTokens.ena, 2)} / WETH ${formatToken(claimableFeesTokens.weth, 4)}`;
-    const depositUsd = toNumber(fundingSummary?.depositUsd);
-    const pct = depositUsd > 0 ? (feesUsd / depositUsd) * 100 : NaN;
+    const pct = positionUsd > 0 ? (feesUsd / positionUsd) * 100 : NaN;
     if (Number.isFinite(pct)) {
       const pctLine = document.createElement('div');
       const pctSpan = document.createElement('span');
       pctSpan.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
       updatePctColor(pctSpan, pct);
-      pctLine.append(pctSpan, document.createTextNode(' of deposits'));
+      pctLine.append(pctSpan, document.createTextNode(' of active positions'));
       refs.health.claimableFeesSub.replaceChildren(tokenLine, pctLine);
     } else {
       const pctLine = document.createElement('div');
