@@ -79,12 +79,14 @@ const refs = {
     netCapitalSub: document.getElementById('healthNetCapitalSub'),
     investmentValue: document.getElementById('healthInvestmentValue'),
     investmentSub: document.getElementById('healthInvestmentSub'),
+    claimableFeesValue: document.getElementById('healthClaimableFeesValue'),
+    claimableFeesSub: document.getElementById('healthClaimableFeesSub'),
     feesCollectedValue: document.getElementById('healthFeesCollectedValue'),
     feesCollectedSub: document.getElementById('healthFeesCollectedSub'),
     netProfitValue: document.getElementById('healthNetProfitValue'),
     netProfitSub: document.getElementById('healthNetProfitSub'),
-    roiValue: document.getElementById('healthRoiValue'),
-    roiSub: document.getElementById('healthRoiSub'),
+    netProfitDetail: document.getElementById('healthNetProfitDetail'),
+    netProfitPct: document.getElementById('healthNetProfitPct'),
   },
   chart: document.getElementById('investmentChart'),
   chartWrap: document.getElementById('investmentChartWrap'),
@@ -436,8 +438,12 @@ function formatToken(value, digits = 2) {
 
 function formatClockTime(ms) {
   if (!Number.isFinite(ms) || ms <= 0) return '—';
-  const iso = new Date(ms).toISOString();
-  return `${iso.slice(11, 16)} UTC`;
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return '—';
+  const pad = (val) => String(val).padStart(2, '0');
+  const hh = pad(date.getHours());
+  const mi = pad(date.getMinutes());
+  return `${hh}:${mi}`;
 }
 
 function applyValueTone(element, value) {
@@ -445,6 +451,13 @@ function applyValueTone(element, value) {
   element.classList.remove('text-positive', 'text-negative');
   if (!Number.isFinite(value) || value === 0) return;
   element.classList.add(value > 0 ? 'text-positive' : 'text-negative');
+}
+
+function updatePctColor(element, pct) {
+  if (!element) return;
+  element.classList.remove('text-positive', 'text-negative');
+  if (!Number.isFinite(pct)) return;
+  element.classList.add(pct >= 0 ? 'text-positive' : 'text-negative');
 }
 
 function applyCardTint(element, value) {
@@ -1766,8 +1779,14 @@ function formatTooltipTimestamp(ms) {
   if (!Number.isFinite(ms) || ms <= 0) return '—';
   const date = new Date(ms);
   if (Number.isNaN(date.getTime())) return '—';
-  const iso = date.toISOString();
-  return `${iso.slice(0, 19).replace('T', ' ')}Z`;
+  const pad = (val) => String(val).padStart(2, '0');
+  const yyyy = date.getFullYear();
+  const mm = pad(date.getMonth() + 1);
+  const dd = pad(date.getDate());
+  const hh = pad(date.getHours());
+  const mi = pad(date.getMinutes());
+  const ss = pad(date.getSeconds());
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
 }
 
 function updateInvestmentChartLegend() {
@@ -2702,6 +2721,15 @@ async function render() {
   const idleUsd = liveSnapshots.reduce((sum, snap) => sum + toNumber(snap?.idleUsd), 0);
   const positionUsd = liveSnapshots.reduce((sum, snap) => sum + toNumber(snap?.positionUsd), 0);
   const feesUsd = liveSnapshots.reduce((sum, snap) => sum + toNumber(snap?.feesUsd), 0);
+  const claimableFeesTokens = liveSnapshots.reduce((sum, snap) => {
+    const amount0 = toBig(snap?.collectable?.amount0 ?? snap?.collectable?.[0] ?? 0n);
+    const amount1 = toBig(snap?.collectable?.amount1 ?? snap?.collectable?.[1] ?? 0n);
+    const ena = Number(ethers.formatUnits(amount0, ENA_DECIMALS));
+    const weth = Number(ethers.formatUnits(amount1, WETH_DECIMALS));
+    sum.ena += Number.isFinite(ena) ? ena : 0;
+    sum.weth += Number.isFinite(weth) ? weth : 0;
+    return sum;
+  }, { ena: 0, weth: 0 });
 
   const netProfitUsd = navUsd - netCapitalUsd;
   const roiPct = netCapitalUsd > 0 ? (netProfitUsd / netCapitalUsd) * 100 : NaN;
@@ -2715,16 +2743,53 @@ async function render() {
 
   if (refs.health.investmentValue) refs.health.investmentValue.textContent = formatUsd(navUsd, 0);
   if (refs.health.investmentSub) {
-    refs.health.investmentSub.textContent = `Active ${formatUsd(positionUsd, 0)} • Fees ${formatUsd(feesUsd, 2)}`;
+    const activeLine = document.createElement('div');
+    activeLine.textContent = `Active ${formatUsd(positionUsd, 0)}`;
+    const feeLine = document.createElement('div');
+    feeLine.textContent = `Fees ${formatUsd(feesUsd, 2)}`;
+    refs.health.investmentSub.replaceChildren(activeLine, feeLine);
+  }
+
+  if (refs.health.claimableFeesValue) {
+    refs.health.claimableFeesValue.textContent = formatUsd(feesUsd, 2);
+    refs.health.claimableFeesValue.classList.remove('text-fees');
+  }
+  if (refs.health.claimableFeesSub) {
+    const tokenLine = document.createElement('div');
+    tokenLine.textContent = `ENA ${formatToken(claimableFeesTokens.ena, 2)} / WETH ${formatToken(claimableFeesTokens.weth, 4)}`;
+    const depositUsd = toNumber(fundingSummary?.depositUsd);
+    const pct = depositUsd > 0 ? (feesUsd / depositUsd) * 100 : NaN;
+    if (Number.isFinite(pct)) {
+      const pctLine = document.createElement('div');
+      const pctSpan = document.createElement('span');
+      pctSpan.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+      updatePctColor(pctSpan, pct);
+      pctLine.append(pctSpan, document.createTextNode(' of deposits'));
+      refs.health.claimableFeesSub.replaceChildren(tokenLine, pctLine);
+    } else {
+      const pctLine = document.createElement('div');
+      pctLine.textContent = '–';
+      refs.health.claimableFeesSub.replaceChildren(tokenLine, pctLine);
+    }
   }
 
   if (refs.health.netProfitValue) refs.health.netProfitValue.textContent = formatUsd(netProfitUsd, 0);
   applyValueTone(refs.health.netProfitValue, netProfitUsd);
-  if (refs.health.netProfitSub) refs.health.netProfitSub.textContent = netProfitUsd >= 0 ? 'Profitable' : 'Below water';
-
-  if (refs.health.roiValue) refs.health.roiValue.textContent = formatPct(roiPct, 2);
-  applyValueTone(refs.health.roiValue, roiPct);
-  if (refs.health.roiSub) refs.health.roiSub.textContent = netCapitalUsd > 0 ? 'Net profit / net capital' : 'n/a';
+  const profitLabel = netProfitUsd >= 0 ? 'Profitable' : 'Below water';
+  if (refs.health.netProfitDetail) {
+    refs.health.netProfitDetail.textContent = profitLabel;
+  } else if (refs.health.netProfitSub) {
+    refs.health.netProfitSub.textContent = profitLabel;
+  }
+  if (refs.health.netProfitPct) {
+    if (Number.isFinite(roiPct)) {
+      refs.health.netProfitPct.textContent = `${roiPct >= 0 ? '+' : ''}${roiPct.toFixed(2)}%`;
+      updatePctColor(refs.health.netProfitPct, roiPct);
+    } else {
+      refs.health.netProfitPct.textContent = '–';
+      updatePctColor(refs.health.netProfitPct);
+    }
+  }
 
   let historyInputs = [];
   try {
@@ -2750,13 +2815,25 @@ async function render() {
   if (refs.health.feesCollectedSub) {
     if (!feeTokensTotals.hasData) {
       refs.health.feesCollectedSub.textContent = 'Subgraph unavailable';
-    } else {
-      const depositUsd = toNumber(fundingSummary?.depositUsd);
-      const pct = depositUsd > 0 ? (feesCollectedUsd / depositUsd) * 100 : NaN;
-      const pctLabel = Number.isFinite(pct) ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}% of deposits` : '–';
-      refs.health.feesCollectedSub.textContent = `ENA ${formatToken(feeTokensTotals.ena, 2)} / WETH ${formatToken(feeTokensTotals.weth, 4)} • ${pctLabel}`;
-    }
-  }
+	    } else {
+	      const depositUsd = toNumber(fundingSummary?.depositUsd);
+	      const pct = depositUsd > 0 ? (feesCollectedUsd / depositUsd) * 100 : NaN;
+	      const tokenLine = document.createElement('div');
+	      tokenLine.textContent = `ENA ${formatToken(feeTokensTotals.ena, 2)} / WETH ${formatToken(feeTokensTotals.weth, 4)}`;
+		      if (Number.isFinite(pct)) {
+		        const pctLine = document.createElement('div');
+		        const pctSpan = document.createElement('span');
+		        pctSpan.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+		        updatePctColor(pctSpan, pct);
+		        pctLine.append(pctSpan, document.createTextNode(' of deposits'));
+		        refs.health.feesCollectedSub.replaceChildren(tokenLine, pctLine);
+		      } else {
+		        const pctLine = document.createElement('div');
+		        pctLine.textContent = '–';
+		        refs.health.feesCollectedSub.replaceChildren(tokenLine, pctLine);
+		      }
+		    }
+		  }
   if (!lastPoint || nowMs - Number(lastPoint.timeMs || 0) > 60_000) {
     investmentHistory.push({
       timeMs: nowMs,
@@ -2808,7 +2885,7 @@ async function render() {
   if (refs.updatedLabel) {
     const now = new Date();
     const rpcLabel = providerRpc ? formatRpcLabel(providerRpc) : 'Public RPC';
-    refs.updatedLabel.textContent = `Updated ${now.toISOString().slice(0, 16).replace('T', ' ')}`;
+    refs.updatedLabel.textContent = `Updated ${now.toLocaleString()}`;
   }
 }
 
