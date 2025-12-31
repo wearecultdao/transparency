@@ -25,6 +25,8 @@ const transferTopic = ethers.id('Transfer(address,address,uint256)');
 const ownershipTransferredTopic = ethers.id('OwnershipTransferred(address,address)');
 const compoundedTopic = ethers.id('Compounded(uint256,uint128)');
 const rebalancedTopic = ethers.id('Rebalanced(uint256,int24,int24,uint128)');
+const nfpmCollectTopic = ethers.id('Collect(uint256,address,uint256,uint256)');
+const nfpmDecreaseTopic = ethers.id('DecreaseLiquidity(uint256,uint128,uint256,uint256)');
 const abiCoder = ethers.AbiCoder.defaultAbiCoder();
 const ZERO_ADDRESS = (ethers?.ZeroAddress || '0x0000000000000000000000000000000000000000').toLowerCase();
 
@@ -1430,7 +1432,7 @@ async function fetchReturns(managers, cultUsd, toBlock) {
   };
 }
 
-function buildInvestmentHistory(vaultHistories, fundingEvents, returnEvents, fallbackPriceCtx) {
+function buildInvestmentHistory(vaultHistories, fundingEvents, returnEvents, fallbackPriceCtx, feeEventsByVault) {
   const histories = Array.isArray(vaultHistories) ? vaultHistories : [];
   const expectedVaultCount = new Set(
     histories
@@ -1440,6 +1442,9 @@ function buildInvestmentHistory(vaultHistories, fundingEvents, returnEvents, fal
   const timelines = histories
     .map((row) => {
       const id = row?.vaultId ? String(row.vaultId).toLowerCase() : null;
+      const feeEvents = feeEventsByVault instanceof Map
+        ? (feeEventsByVault.get(id) || [])
+        : (feeEventsByVault?.[id] || []);
       const snaps = Array.isArray(row?.snapshots) ? row.snapshots : [];
       const series = snaps
         .map((snap) => {
@@ -1456,8 +1461,6 @@ function buildInvestmentHistory(vaultHistories, fundingEvents, returnEvents, fal
           const idleWeth = toNumber(snap?.idleWeth);
           const collectEna = toNumber(snap?.collectableFeesEna);
           const collectWeth = toNumber(snap?.collectableFeesWeth);
-          const cumulativeFeeEna = toNumber(snap?.cumulativeFeesEna);
-          const cumulativeFeeWeth = toNumber(snap?.cumulativeFeesWeth);
 
           let priceEthUsd = toNumber(snap?.priceEthUsd);
           let priceEnaUsd = toNumber(snap?.priceEnaUsd);
@@ -1497,8 +1500,6 @@ function buildInvestmentHistory(vaultHistories, fundingEvents, returnEvents, fal
             navUsd,
             enaTokens,
             wethTokens,
-            cumulativeFeeEna,
-            cumulativeFeeWeth,
             priceEnaUsd,
             priceEthUsd,
           };
@@ -1523,19 +1524,20 @@ function buildInvestmentHistory(vaultHistories, fundingEvents, returnEvents, fal
         }
       }
 
-      let prevFeeEna = 0;
-      let prevFeeWeth = 0;
+      let feeCursor = 0;
       let cumulativeFeesUsd = 0;
       deduped.forEach((point) => {
-        const cumEna = toNumber(point?.cumulativeFeeEna);
-        const cumWeth = toNumber(point?.cumulativeFeeWeth);
-        const deltaEna = Math.max(cumEna - prevFeeEna, 0);
-        const deltaWeth = Math.max(cumWeth - prevFeeWeth, 0);
-        if ((deltaEna > 0 || deltaWeth > 0) && point.priceEnaUsd > 0 && point.priceEthUsd > 0) {
-          cumulativeFeesUsd += deltaEna * point.priceEnaUsd + deltaWeth * point.priceEthUsd;
+        while (feeCursor < feeEvents.length) {
+          const evt = feeEvents[feeCursor];
+          const evtBlock = Number(evt?.blockNumber ?? 0);
+          if (!Number.isFinite(evtBlock) || evtBlock <= 0) {
+            feeCursor += 1;
+            continue;
+          }
+          if (evtBlock > point.blockNumber) break;
+          cumulativeFeesUsd += toNumber(evt?.usd);
+          feeCursor += 1;
         }
-        prevFeeEna = Math.max(prevFeeEna, cumEna);
-        prevFeeWeth = Math.max(prevFeeWeth, cumWeth);
         point.feesCollectedUsd = cumulativeFeesUsd;
       });
 
@@ -1936,6 +1938,217 @@ async function fetchLatestActions(managers, toBlock) {
   });
 
   return events;
+}
+
+async function fetchAutomationAddress(managerAddress) {
+  const checksum = normalizeAddress(managerAddress);
+  if (!checksum) return null;
+  try {
+    const automation = await rpcCall(
+      (activeProvider) => new ethers.Contract(checksum, ABI.LIQUIDITY_MANAGER, activeProvider).automation(),
+      'automation()',
+    );
+    return normalizeAddress(automation);
+  } catch {
+    return null;
+  }
+}
+
+function buildRecipientSet(managerAddress, ownerHistory, automationAddress) {
+  const manager = normalizeAddress(managerAddress);
+  if (!manager) return new Set();
+  const owners = normalizeOwnerAddresses(ownerHistory, [manager]);
+  const recipients = new Set([manager.toLowerCase()]);
+  owners.forEach((addr) => recipients.add(addr.toLowerCase()));
+  const automation = normalizeAddress(automationAddress);
+  if (automation) recipients.add(automation.toLowerCase());
+  return recipients;
+}
+
+function sumNfpmFeesFromReceipt(receipt, recipientSet) {
+  const logs = Array.isArray(receipt?.logs) ? receipt.logs : [];
+  const nfpmAddr = String(ADDRESSES?.NONFUNGIBLE_POSITION_MANAGER || '').toLowerCase();
+  if (!nfpmAddr || !logs.length) return { fee0: 0n, fee1: 0n };
+  const allowed = recipientSet instanceof Set ? recipientSet : new Set();
+  const principalByToken = new Map();
+  const decreaseTopic = String(nfpmDecreaseTopic || '').toLowerCase();
+  const collectTopic = String(nfpmCollectTopic || '').toLowerCase();
+  let fee0 = 0n;
+  let fee1 = 0n;
+
+  for (const log of logs) {
+    if ((log?.address || '').toLowerCase() !== nfpmAddr) continue;
+    const topics = Array.isArray(log?.topics) ? log.topics : [];
+    if (topics.length < 2) continue;
+    const topic0 = String(topics[0] || '').toLowerCase();
+    const tokenTopic = String(topics[1] || '').toLowerCase();
+    if (!tokenTopic) continue;
+    const data = log?.data;
+    if (!data || data === '0x') continue;
+
+    if (topic0 === decreaseTopic) {
+      try {
+        const decoded = abiCoder.decode(['uint128', 'uint256', 'uint256'], data);
+        const entry = principalByToken.get(tokenTopic) || { amount0: 0n, amount1: 0n };
+        entry.amount0 += toBig(decoded[1]);
+        entry.amount1 += toBig(decoded[2]);
+        principalByToken.set(tokenTopic, entry);
+      } catch (err) {
+        continue;
+      }
+      continue;
+    }
+
+    if (topic0 !== collectTopic) continue;
+    try {
+      const decoded = abiCoder.decode(['address', 'uint256', 'uint256'], data);
+      const recipient = decoded[0] ? normalizeAddress(decoded[0]) : null;
+      const recipientLower = recipient ? recipient.toLowerCase() : null;
+      const amount0 = toBig(decoded[1]);
+      const amount1 = toBig(decoded[2]);
+      const entry = principalByToken.get(tokenTopic) || { amount0: 0n, amount1: 0n };
+      const principal0 = entry.amount0 > amount0 ? amount0 : entry.amount0;
+      const principal1 = entry.amount1 > amount1 ? amount1 : entry.amount1;
+      entry.amount0 -= principal0;
+      entry.amount1 -= principal1;
+      if (entry.amount0 === 0n && entry.amount1 === 0n) principalByToken.delete(tokenTopic);
+      else principalByToken.set(tokenTopic, entry);
+
+      const delta0 = amount0 - principal0;
+      const delta1 = amount1 - principal1;
+      if (recipientLower && allowed.has(recipientLower)) {
+        if (delta0 > 0n) fee0 += delta0;
+        if (delta1 > 0n) fee1 += delta1;
+      }
+    } catch (err) {
+      continue;
+    }
+  }
+
+  return { fee0, fee1 };
+}
+
+async function fetchFeeCollectedEvents(manager, toBlock, options = {}) {
+  const { ownerHistory = [], maxTxs = 800 } = options || {};
+  const addr = normalizeAddress(manager?.address);
+  if (!addr) return [];
+  const fromBlock = Number(manager?.startBlock) > 0 ? Number(manager.startBlock) : 0;
+  const safeFromBlock = fromBlock > 0 ? fromBlock : Math.max(0, toBlock - 200_000);
+
+  const [rebalanceLogs, compoundLogs] = await Promise.all([
+    fetchLogs(addr, [rebalancedTopic], safeFromBlock, toBlock).catch(() => []),
+    fetchLogs(addr, [compoundedTopic], safeFromBlock, toBlock).catch(() => []),
+  ]);
+
+  const txMap = new Map();
+  for (const log of [...(rebalanceLogs || []), ...(compoundLogs || [])]) {
+    const txHash = log?.transactionHash;
+    const blockNumber = Number(log?.blockNumber);
+    if (!txHash || !Number.isFinite(blockNumber) || blockNumber <= 0) continue;
+    const key = String(txHash).toLowerCase();
+    if (txMap.has(key)) continue;
+    txMap.set(key, { txHash: String(txHash), blockNumber });
+    if (txMap.size >= maxTxs) break;
+  }
+
+  const txs = Array.from(txMap.values()).sort((a, b) => {
+    if (a.blockNumber !== b.blockNumber) return a.blockNumber - b.blockNumber;
+    return a.txHash.localeCompare(b.txHash);
+  });
+  if (!txs.length) return [];
+
+  const blocks = Array.from(new Set(txs.map((tx) => tx.blockNumber)));
+  await warmBlockData(blocks, 6);
+
+  const automation = await fetchAutomationAddress(addr);
+  const recipientSet = buildRecipientSet(addr, ownerHistory, automation);
+
+  const events = [];
+  for (const tx of txs) {
+    let receipt = null;
+    try {
+      receipt = await rpcCall(
+        (activeProvider) => activeProvider.getTransactionReceipt(tx.txHash),
+        'RPC eth_getTransactionReceipt',
+      );
+    } catch {
+      receipt = null;
+    }
+    if (!receipt) continue;
+    const { fee0, fee1 } = sumNfpmFeesFromReceipt(receipt, recipientSet);
+    if (!(fee0 > 0n) && !(fee1 > 0n)) continue;
+
+    const blockNumber = Number(receipt?.blockNumber ?? tx.blockNumber);
+    const ts = Number.isFinite(blockNumber) && blockNumber > 0
+      ? (blockTimestampCache.get(blockNumber) || await getBlockTimestampSec(blockNumber))
+      : 0;
+    const ctx = Number.isFinite(blockNumber) && blockNumber > 0
+      ? (priceContextCache.get(blockNumber) || await getPriceContextAtBlock(blockNumber))
+      : null;
+    const enaTokens = Number(ethers.formatUnits(fee0, ENA_DECIMALS));
+    const wethTokens = Number(ethers.formatUnits(fee1, WETH_DECIMALS));
+    const enaUsd = toNumber(ctx?.enaUsd);
+    const ethUsd = toNumber(ctx?.ethUsd);
+    const usd = (Number.isFinite(enaTokens) ? enaTokens : 0) * (enaUsd > 0 ? enaUsd : 0)
+      + (Number.isFinite(wethTokens) ? wethTokens : 0) * (ethUsd > 0 ? ethUsd : 0);
+
+    events.push({
+      blockNumber,
+      timeMs: ts > 0 ? ts * 1000 : 0,
+      ena: Number.isFinite(enaTokens) ? enaTokens : 0,
+      weth: Number.isFinite(wethTokens) ? wethTokens : 0,
+      usd: Number.isFinite(usd) ? usd : 0,
+    });
+  }
+
+  events.sort((a, b) => {
+    const ab = Number(a?.blockNumber ?? 0);
+    const bb = Number(b?.blockNumber ?? 0);
+    if (ab !== bb) return ab - bb;
+    return Number(a?.timeMs ?? 0) - Number(b?.timeMs ?? 0);
+  });
+
+  return events;
+}
+
+async function fetchFeesCollectedData(vaultNodes, toBlock, ownerHistoryByVault) {
+  const list = Array.isArray(vaultNodes) ? vaultNodes : [];
+  const historyMap = ownerHistoryByVault instanceof Map ? ownerHistoryByVault : new Map();
+  const feeEventsByVault = new Map();
+  let hasData = false;
+  let ena = 0;
+  let weth = 0;
+  let usd = 0;
+
+  for (const node of list) {
+    const addr = normalizeAddress(node?.address);
+    if (!addr) continue;
+    const key = addr.toLowerCase();
+    const ownerHistory = historyMap.get(key) || [];
+    try {
+      const events = await fetchFeeCollectedEvents({ address: addr, startBlock: node?.startBlock }, toBlock, { ownerHistory });
+      feeEventsByVault.set(key, events);
+      hasData = true;
+      for (const evt of events) {
+        ena += toNumber(evt?.ena);
+        weth += toNumber(evt?.weth);
+        usd += toNumber(evt?.usd);
+      }
+    } catch (err) {
+      console.warn('fee collection history fetch failed', err);
+      feeEventsByVault.set(key, []);
+    }
+  }
+
+  return {
+    feeEventsByVault,
+    totals: {
+      ena,
+      weth,
+      usd,
+      hasData,
+    },
+  };
 }
 
 function ceilToMinuteMs(ms) {
@@ -2790,49 +3003,58 @@ async function render() {
     }
   }
 
-  let historyInputs = [];
-  try {
-    const historyVaultIds = vaultNodesResolved.map((node) => String(node.address).toLowerCase());
-    const vaultQueries = await Promise.all(
-      historyVaultIds.map(async (vaultId) => ({ vaultId, snapshots: await fetchVaultSnapshots(vaultId) })),
-    );
-    historyInputs = vaultQueries;
-  } catch (err) {
-    console.warn('subgraph snapshot fetch failed', err);
-  }
+	  let historyInputs = [];
+	  const ownerHistoryByVault = new Map(
+	    fundingProfiles
+	      .map((profile) => {
+	        const addr = normalizeAddress(profile?.address);
+	        return addr ? [addr.toLowerCase(), profile?.ownerHistory || []] : null;
+	      })
+	      .filter(Boolean),
+	  );
+	  const { feeEventsByVault, totals: feeTotals } = await fetchFeesCollectedData(vaultNodesResolved, toBlock, ownerHistoryByVault);
+	  try {
+	    const historyVaultIds = vaultNodesResolved.map((node) => String(node.address).toLowerCase());
+	    const vaultQueries = await Promise.all(
+	      historyVaultIds.map(async (vaultId) => ({ vaultId, snapshots: await fetchVaultSnapshots(vaultId) })),
+	    );
+	    historyInputs = vaultQueries;
+	  } catch (err) {
+	    console.warn('subgraph snapshot fetch failed', err);
+	  }
 
-  const feeTokensTotals = summarizeCumulativeFeeTotals(historyInputs);
-  const returnsTotalUsd = returnEvents.reduce((sum, evt) => sum + toNumber(evt?.usd), 0);
-  const investmentHistory = buildInvestmentHistory(historyInputs, stitchedFundingEvents, returnEvents, priceCtx);
-  const nowMs = Date.now();
-  const lastPoint = investmentHistory.length ? investmentHistory[investmentHistory.length - 1] : null;
-  const feesCollectedUsd = lastPoint ? toNumber(lastPoint.feesCollectedUsd) : 0;
-  if (refs.health.feesCollectedValue) {
-    refs.health.feesCollectedValue.textContent = feeTokensTotals.hasData ? formatUsd(feesCollectedUsd, 0) : '—';
-    refs.health.feesCollectedValue.classList.toggle('text-fees', feeTokensTotals.hasData && feesCollectedUsd > 0);
-  }
-  if (refs.health.feesCollectedSub) {
-    if (!feeTokensTotals.hasData) {
-      refs.health.feesCollectedSub.textContent = 'Subgraph unavailable';
-	    } else {
-	      const depositUsd = toNumber(fundingSummary?.depositUsd);
-	      const pct = depositUsd > 0 ? (feesCollectedUsd / depositUsd) * 100 : NaN;
-	      const tokenLine = document.createElement('div');
-	      tokenLine.textContent = `ENA ${formatToken(feeTokensTotals.ena, 2)} / WETH ${formatToken(feeTokensTotals.weth, 4)}`;
-		      if (Number.isFinite(pct)) {
-		        const pctLine = document.createElement('div');
-		        const pctSpan = document.createElement('span');
-		        pctSpan.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
-		        updatePctColor(pctSpan, pct);
-		        pctLine.append(pctSpan, document.createTextNode(' of deposits'));
-		        refs.health.feesCollectedSub.replaceChildren(tokenLine, pctLine);
-		      } else {
-		        const pctLine = document.createElement('div');
-		        pctLine.textContent = '–';
-		        refs.health.feesCollectedSub.replaceChildren(tokenLine, pctLine);
-		      }
-		    }
-		  }
+	  const returnsTotalUsd = returnEvents.reduce((sum, evt) => sum + toNumber(evt?.usd), 0);
+	  const investmentHistory = buildInvestmentHistory(historyInputs, stitchedFundingEvents, returnEvents, priceCtx, feeEventsByVault);
+	  const nowMs = Date.now();
+	  const lastPoint = investmentHistory.length ? investmentHistory[investmentHistory.length - 1] : null;
+	  const feesCollectedUsdHistory = lastPoint ? toNumber(lastPoint.feesCollectedUsd) : 0;
+	  const feesCollectedUsd = feeTotals?.hasData ? toNumber(feeTotals?.usd) : feesCollectedUsdHistory;
+	  if (refs.health.feesCollectedValue) {
+	    refs.health.feesCollectedValue.textContent = feeTotals?.hasData ? formatUsd(feesCollectedUsd, 0) : '—';
+	    refs.health.feesCollectedValue.classList.toggle('text-fees', feeTotals?.hasData && feesCollectedUsd > 0);
+	  }
+	  if (refs.health.feesCollectedSub) {
+	    if (!feeTotals?.hasData) {
+	      refs.health.feesCollectedSub.textContent = 'Unavailable';
+		    } else {
+		      const depositUsd = toNumber(fundingSummary?.depositUsd);
+		      const pct = depositUsd > 0 ? (feesCollectedUsd / depositUsd) * 100 : NaN;
+		      const tokenLine = document.createElement('div');
+		      tokenLine.textContent = `ENA ${formatToken(feeTotals.ena, 2)} / WETH ${formatToken(feeTotals.weth, 4)}`;
+			      if (Number.isFinite(pct)) {
+			        const pctLine = document.createElement('div');
+			        const pctSpan = document.createElement('span');
+			        pctSpan.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+			        updatePctColor(pctSpan, pct);
+			        pctLine.append(pctSpan, document.createTextNode(' of deposits'));
+			        refs.health.feesCollectedSub.replaceChildren(tokenLine, pctLine);
+			      } else {
+			        const pctLine = document.createElement('div');
+			        pctLine.textContent = '–';
+			        refs.health.feesCollectedSub.replaceChildren(tokenLine, pctLine);
+			      }
+			    }
+			  }
   if (!lastPoint || nowMs - Number(lastPoint.timeMs || 0) > 60_000) {
     investmentHistory.push({
       timeMs: nowMs,
