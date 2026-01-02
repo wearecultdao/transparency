@@ -2868,7 +2868,7 @@ async function render() {
 
   if (refs.impactCard) {
     const hideImpact = allCompound && totalRaw === 0n;
-    refs.impactCard.classList.toggle('is-hidden', hideImpact);
+    refs.impactCard.classList.toggle('is-shown', hideImpact); //'is-hidden'
   }
 
   const burnedTokens = toNumber(ethers.formatUnits(burnedNetRaw, CULT_DECIMALS), 0);
