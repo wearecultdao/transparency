@@ -2868,7 +2868,7 @@ async function render() {
 
   if (refs.impactCard) {
     const hideImpact = allCompound && totalRaw === 0n;
-    refs.impactCard.classList.toggle('is-shown', hideImpact); //'is-hidden'
+    refs.impactCard.classList.toggle('is-hidden', hideImpact); //'is-shown'
   }
 
   const burnedTokens = toNumber(ethers.formatUnits(burnedNetRaw, CULT_DECIMALS), 0);
@@ -2902,7 +2902,7 @@ async function render() {
 
   const fundingProfiles = await Promise.all(
     vaultNodesResolved.map(async (node) => {
-      const startBlock = await ensureManagerStartBlock(node);
+      const startBlock = await ensureManagerStartBlock(node);	
       const ownerHistory = await fetchOwnerHistory(node.address, startBlock, toBlock);
       const flows = await sumOwnerFlows(node.address, ownerHistory, startBlock, toBlock);
       return { ...node, startBlock, ownerHistory, ...flows };
