@@ -2868,7 +2868,7 @@ async function render() {
 
   if (refs.impactCard) {
     const hideImpact = allCompound && totalRaw === 0n;
-    refs.impactCard.classList.toggle('is-hidden', hideImpact); //'is-shown'
+    refs.impactCard.classList.toggle('is-shown', hideImpact); //'is-hidden'
   }
 
   const burnedTokens = toNumber(ethers.formatUnits(burnedNetRaw, CULT_DECIMALS), 0);
@@ -2902,7 +2902,7 @@ async function render() {
 
   const fundingProfiles = await Promise.all(
     vaultNodesResolved.map(async (node) => {
-      const startBlock = await ensureManagerStartBlock(node);	
+      const startBlock = await ensureManagerStartBlock(node);
       const ownerHistory = await fetchOwnerHistory(node.address, startBlock, toBlock);
       const flows = await sumOwnerFlows(node.address, ownerHistory, startBlock, toBlock);
       return { ...node, startBlock, ownerHistory, ...flows };
@@ -3028,7 +3028,22 @@ async function render() {
 	  const nowMs = Date.now();
 	  const lastPoint = investmentHistory.length ? investmentHistory[investmentHistory.length - 1] : null;
 	  const feesCollectedUsdHistory = lastPoint ? toNumber(lastPoint.feesCollectedUsd) : 0;
-	  const feesCollectedUsd = feeTotals?.hasData ? toNumber(feeTotals?.usd) : feesCollectedUsdHistory;
+	  const feeTotalsEna = toNumber(feeTotals?.ena);
+	  const feeTotalsWeth = toNumber(feeTotals?.weth);
+	  const hasFeeTokens = feeTotalsEna > 0 || feeTotalsWeth > 0;
+	  const currentEnaUsd = toNumber(priceCtx?.enaUsd);
+	  const currentEthUsd = toNumber(priceCtx?.ethUsd);
+	  const hasCurrentPrices = currentEnaUsd > 0 || currentEthUsd > 0;
+	  const feesCollectedUsdNow = hasCurrentPrices
+	    ? feeTotalsEna * (currentEnaUsd > 0 ? currentEnaUsd : 0) + feeTotalsWeth * (currentEthUsd > 0 ? currentEthUsd : 0)
+	    : NaN;
+	  const feesCollectedUsd = feeTotals?.hasData
+	    ? (
+	        Number.isFinite(feesCollectedUsdNow) && (feesCollectedUsdNow > 0 || !hasFeeTokens)
+	          ? feesCollectedUsdNow
+	          : toNumber(feeTotals?.usd)
+	      )
+	    : feesCollectedUsdHistory;
 	  if (refs.health.feesCollectedValue) {
 	    refs.health.feesCollectedValue.textContent = feeTotals?.hasData ? formatUsd(feesCollectedUsd, 0) : '—';
 	    refs.health.feesCollectedValue.classList.toggle('text-fees', feeTotals?.hasData && feesCollectedUsd > 0);
